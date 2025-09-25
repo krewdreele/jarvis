@@ -23,13 +23,24 @@ class JarvisFace:
         self.hats = self.load_images("hats")
         self.glasses_options = self.load_images("glasses")
 
-    def load_images(self, subfolder):
+def load_images(self, subfolder):
         assets = {}
         path = os.path.join(ASSETS_DIR, subfolder)
-        for fname in os.listdir(path):
-            name = fname.split('.')[0]
-            assets[name] = pygame.image.load(os.path.join(path, fname)).convert_alpha()
-        return assets
+        try:
+            if not os.path.isdir(path):
+                return assets
+            for fname in os.listdir(path):
+                if not fname.lower().endswith((".png", ".jpg", ".jpeg")):
+                    continue
+                name = fname.rsplit('.', 1)[0]
+                try:
+                    assets[name] = pygame.image.load(os.path.join(path, fname)).convert_alpha()
+                except Exception:
+                    # Skip unreadable/corrupt files rather than crash
+                    continue
+            return assets
+        except Exception:
+            return assets
 
     def set_expression(self, name):
         if name in self.expressions:
@@ -85,9 +96,9 @@ def main():
     clock = pygame.time.Clock()
     face = JarvisFace(screen)
 
-    expression_names = list(face.expressions.keys())
-    hat_names = list(face.hats.keys())
-    glasses_names = list(face.glasses_options.keys())
+    expression_names = list(face.expressions.keys()) or ["(none)"]
+    hat_names = list(face.hats.keys()) or ["(none)"]
+    glasses_names = list(face.glasses_options.keys()) or ["(none)"]
     expr_index = hat_index = glasses_index = 0
 
     running = True
@@ -105,14 +116,14 @@ def main():
                 running = False
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if expr_btn.collidepoint(event.pos):
-                    expr_index = (expr_index + 1) % len(expression_names)
+                if expr_btn.collidepoint(event.pos) and expression_names:
+                    expr_index = (expr_index + 1) % max(1, len(expression_names))
                     face.set_expression(expression_names[expr_index])
-                elif hat_btn.collidepoint(event.pos):
-                    hat_index = (hat_index + 1) % len(hat_names)
+                elif hat_btn.collidepoint(event.pos) and hat_names:
+                    hat_index = (hat_index + 1) % max(1, len(hat_names))
                     face.set_hat(hat_names[hat_index])
-                elif glasses_btn.collidepoint(event.pos):
-                    glasses_index = (glasses_index + 1) % len(glasses_names)
+                elif glasses_btn.collidepoint(event.pos) and glasses_names:
+                    glasses_index = (glasses_index + 1) % max(1, len(glasses_names))
                     face.set_glasses(glasses_names[glasses_index])
 
         pygame.display.flip()

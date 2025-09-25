@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import List, Optional
-import re
 
 
 @dataclass
@@ -71,8 +73,11 @@ class CalendarEvent:
         )
 
 
+from Assistant.core.paths import CALENDAR_EVENTS_PATH
+
+
 class CalendarService:
-    def __init__(self, storage_path: str = "Assistant/calendar_events.json") -> None:
+    def __init__(self, storage_path: str = CALENDAR_EVENTS_PATH) -> None:
         self.storage_path = storage_path
         os.makedirs(os.path.dirname(storage_path), exist_ok=True)
         self._events: List[CalendarEvent] = []
@@ -82,25 +87,22 @@ class CalendarService:
         if not os.path.exists(self.storage_path):
             self._events = []
             return
-        try:
-            with open(self.storage_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self._events = [CalendarEvent.from_dict(e) for e in data]
-            # If any normalization changed notes/attendees compared to raw file, persist back
-            dirty = False
-            for ev, raw in zip(self._events, data):
-                raw_attendees = raw.get("attendees") or []
-                if isinstance(raw_attendees, str):
-                    raw_attendees = [s.strip() for s in re.split(r"\s*(?:,|;| and )\s*", raw_attendees) if s.strip()]
-                # Compare case-insensitively to avoid trivial diffs
-                def _norm_list(xs):
-                    return [str(x).strip().lower() for x in (xs or []) if str(x).strip()]
-                if (raw.get("notes") != ev.notes) or (_norm_list(raw_attendees) != _norm_list(ev.attendees)):
-                    dirty = True
-            if dirty:
-                self._save()
-        except Exception:
-            self._events = []
+        with open(self.storage_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self._events = [CalendarEvent.from_dict(e) for e in data]
+        # If any normalization changed notes/attendees compared to raw file, persist back
+        dirty = False
+        for ev, raw in zip(self._events, data):
+            raw_attendees = raw.get("attendees") or []
+            if isinstance(raw_attendees, str):
+                raw_attendees = [s.strip() for s in re.split(r"\s*(?:,|;| and )\s*", raw_attendees) if s.strip()]
+            # Compare case-insensitively to avoid trivial diffs
+            def _norm_list(xs):
+                return [str(x).strip().lower() for x in (xs or []) if str(x).strip()]
+            if (raw.get("notes") != ev.notes) or (_norm_list(raw_attendees) != _norm_list(ev.attendees)):
+                dirty = True
+        if dirty:
+            self._save()
 
     def _save(self) -> None:
         data = [asdict(e) for e in self._events]
@@ -133,12 +135,27 @@ class CalendarService:
         return list(self._events)
 
     def upcoming(self, now: Optional[datetime] = None, limit: int = 10) -> List[CalendarEvent]:
-        now = now or datetime.now()
-        def start_dt(ev: CalendarEvent):
+        """Return upcoming events after 'now' (inclusive), limited to N.
+
+        Normalizes both 'now' and event start times to the local timezone to
+        avoid naive/aware comparison errors.
+        """
+        local_tz = datetime.now().astimezone().tzinfo
+
+        def _to_local_aware(dt: datetime) -> datetime:
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=local_tz)
+            return dt.astimezone(local_tz)
+
+        now = _to_local_aware(now or datetime.now())
+
+        def start_dt(ev: CalendarEvent) -> datetime:
             try:
-                return datetime.fromisoformat((ev.start or "").replace("Z", "+00:00"))
+                dt_raw = datetime.fromisoformat((ev.start or "").replace("Z", "+00:00"))
+                return _to_local_aware(dt_raw)
             except Exception:
-                return datetime.max
+                return datetime.max.replace(tzinfo=local_tz)
+
         events = sorted(self._events, key=start_dt)
         return [e for e in events if start_dt(e) >= now][:limit]
 
@@ -193,15 +210,30 @@ class CalendarService:
             y, m, d = map(int, date_str.split("-"))
         except Exception:
             return []
+        local_tz = datetime.now().astimezone().tzinfo
+
+        def _to_local_aware(dt: datetime) -> datetime:
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=local_tz)
+            return dt.astimezone(local_tz)
+
         out: List[CalendarEvent] = []
         for e in self._events:
             try:
-                s = datetime.fromisoformat((e.start or "").replace("Z", "+00:00"))
+                s_raw = datetime.fromisoformat((e.start or "").replace("Z", "+00:00"))
+                s = _to_local_aware(s_raw)
             except Exception:
                 continue
             if s.year == y and s.month == m and s.day == d:
                 out.append(e)
-        out.sort(key=lambda ev: ev.start)
+        # Sort by local datetime to be consistent
+        def _sort_key(ev: CalendarEvent):
+            try:
+                dt_raw = datetime.fromisoformat((ev.start or "").replace("Z", "+00:00"))
+                return _to_local_aware(dt_raw)
+            except Exception:
+                return datetime.max.replace(tzinfo=local_tz)
+        out.sort(key=_sort_key)
         return out
 
     def candidates_by_title(self, title_substring: str, date_only: Optional[str] = None) -> List[CalendarEvent]:
@@ -213,11 +245,17 @@ class CalendarService:
         ts = (title_substring or "").strip().lower()
         if not ts:
             return []
+        local_tz = datetime.now().astimezone().tzinfo
+        def _to_local_aware(dt: datetime) -> datetime:
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=local_tz)
+            return dt.astimezone(local_tz)
         def start_dt(ev: CalendarEvent):
             try:
-                return datetime.fromisoformat((ev.start or "").replace("Z", "+00:00"))
+                dt_raw = datetime.fromisoformat((ev.start or "").replace("Z", "+00:00"))
+                return _to_local_aware(dt_raw)
             except Exception:
-                return datetime.max
+                return datetime.max.replace(tzinfo=local_tz)
         results: List[CalendarEvent] = []
         for e in self._events:
             et = (e.title or "").strip().lower()

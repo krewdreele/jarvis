@@ -2,4 +2,11 @@ interaction_logs/*
 
 .env
 
-calendar_events.json
+*.json
+
+*.md
+
+temp.wav
+
+__pycache__/
+*.pyc
